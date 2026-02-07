@@ -2,7 +2,41 @@
 
 set -e
 
-echo "=== OpenClaw 初始化脚本 ==="
+echo "=== OpenClaw 初始化脚本 (HF + Tailscale版) ==="
+
+# --- [修改1] 强制设置 Hugging Face 必需的环境变量 ---
+export OPENCLAW_GATEWAY_PORT=7860
+export OPENCLAW_GATEWAY_BIND="lan"
+
+# --- [修改2] 插入 Tailscale 启动逻辑 ---
+# 确保 Tailscale socket 目录存在且 node 用户可写
+mkdir -p /tmp/tailscale
+chown node:node /tmp/tailscale
+
+if [ -n "$TS_AUTHKEY" ]; then
+    echo "=== 启动 Tailscale (Userspace Mode) ==="
+    
+    # 启动守护进程 (使用 gosu 切换到 node 用户运行)
+    # 关键参数: --tun=userspace-networking (不需要 root 权限)
+    gosu node tailscaled \
+        --tun=userspace-networking \
+        --socket=/tmp/tailscale/tailscaled.sock &
+    
+    sleep 5
+    
+    echo "正在登录 Tailscale..."
+    gosu node tailscale \
+        --socket=/tmp/tailscale/tailscaled.sock up \
+        --authkey="${TS_AUTHKEY}" \
+        --hostname="${TS_HOSTNAME:-openclaw-hf}" \
+        --ssh \
+        --accept-routes=false &
+    
+    echo "✅ Tailscale 后台启动中..."
+else
+    echo "⚠️ 未设置 TS_AUTHKEY，跳过 Tailscale 启动"
+fi
+# ----------------------------------------
 
 # 创建必要的目录并确保权限正确
 mkdir -p /home/node/.openclaw/workspace
@@ -378,6 +412,8 @@ cleanup() {
         kill -TERM "$GATEWAY_PID" 2>/dev/null || true
         wait "$GATEWAY_PID" 2>/dev/null || true
     fi
+    # 停止 Tailscale
+    pkill tailscaled 2>/dev/null || true
     echo "=== 服务已停止 ==="
     exit 0
 }
@@ -385,11 +421,20 @@ cleanup() {
 # 捕获终止信号
 trap cleanup SIGTERM SIGINT SIGQUIT
 
-# 在后台启动 OpenClaw Gateway 作为子进程
-gosu node env HOME=/home/node openclaw gateway --verbose &
+# --- [修改3] 启动命令增加关键参数以适配 HF ---
+# --allow-unconfigured: 解决配置文件存在但报错的问题
+# --trusted-proxies "0.0.0.0/0": 解决 HF 负载均衡代理报错
+# --strict-origin "false": 解决跨域连接报错
+gosu node env HOME=/home/node openclaw gateway \
+    --verbose \
+    --allow-unconfigured \
+    --trusted-proxies "0.0.0.0/0" \
+    --strict-origin "false" &
+
 GATEWAY_PID=$!
 
 echo "=== OpenClaw Gateway 已启动 (PID: $GATEWAY_PID) ==="
+echo "WebUI 地址: https://你的HF空间地址.hf.space"
 
 # 主进程等待子进程
 wait "$GATEWAY_PID"
