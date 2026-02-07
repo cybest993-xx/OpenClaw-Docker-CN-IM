@@ -9,63 +9,55 @@ on:
       - master
   workflow_dispatch:
 
-env:
-  REGISTRY_DOCKERHUB: docker.io
-  REGISTRY_GHCR: ghcr.io
-
 jobs:
   build-only:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # 移除了 packages: write，因为不再需要推送
-      
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-        
+
       - name: 读取版本号
         id: version
         run: |
+          # 读取 version.txt 并去除空格
           VERSION=$(cat version.txt | tr -d '[:space:]')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "📦 构建版本: $VERSION"
-          
+          echo "📦 检测到版本: $VERSION"
+
       - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
-        
-      # --- 已删除登录步骤 (不需要推送无需登录) ---
-      
+
       - name: 提取 Docker 元数据
         id: meta
         uses: docker/metadata-action@v5
         with:
+          # --- 关键修复 ---
+          # 这里不再引用 secrets，而是直接使用 GitHub 仓库名
+          # 例如: ghcr.io/your-username/your-repo
           images: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKERHUB_REPO }}
-            ${{ env.REGISTRY_GHCR }}/${{ github.repository }}
+            ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=latest
-            type=sha,prefix={{branch}}-
-            
+
       - name: 构建 Docker 镜像 (仅构建)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          # 保留多架构构建用于测试，但如果不推送，这些镜像只会存在于构建缓存中
+          # 保留多架构构建用于测试
           platforms: linux/amd64,linux/arm64
-          # 核心修改：设置为 false
+          # 核心设置：不推送
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          
-      - name: 输出构建结果
+
+      - name: 构建完成通知
         run: |
-          echo "✅ Docker 镜像构建测试成功！(未推送)"
-          echo ""
-          echo "🔖 版本号: ${{ steps.version.outputs.version }}"
-          echo "📋 包含标签 (仅供参考):"
-          echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'
+          echo "✅ Docker 镜像构建成功！(未推送)"
+          echo "🔖 版本: ${{ steps.version.outputs.version }}"
