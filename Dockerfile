@@ -5,6 +5,7 @@ FROM node:22-slim
 WORKDIR /app
 
 # 安装必要的系统依赖
+# 增加了 gnupg, iptables (Tailscale 需要)
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
@@ -21,7 +22,15 @@ RUN apt-get update \
     socat \
     tini \
     websockify \
+    gnupg \
+    iptables \
   && rm -rf /var/lib/apt/lists/*
+
+# 2. 安装 Tailscale 官方客户端
+RUN curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null && \
+    curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list | tee /etc/apt/sources.list.d/tailscale.list && \
+    apt-get update && \
+    apt-get install -y tailscale 
 
 # 更新 npm 到最新版本
 RUN npm install -g npm@latest
@@ -39,8 +48,10 @@ RUN npm install -g playwright-extra puppeteer-extra-plugin-stealth
 RUN npm install -g @steipete/bird
 
 # 创建配置目录并设置权限
+# 同时为 Tailscale 创建运行目录，确保非 root 用户能写入
 RUN mkdir -p /home/node/.openclaw/workspace && \
-    chown -R node:node /home/node
+    mkdir -p /var/run/tailscale /var/cache/tailscale /var/lib/tailscale && \
+    chown -R node:node /home/node /var/run/tailscale /var/cache/tailscale /var/lib/tailscale
 
 # 切换到 node 用户安装插件
 USER node
@@ -60,6 +71,7 @@ RUN cd /tmp && \
 # 安装企业微信插件 - 使用 timeout 防止卡住，忽略错误继续构建
 RUN timeout 300 openclaw plugins install openclaw-plugin-wecom || true
 
+
 # 切换回 root 用户继续后续操作
 USER root
 
@@ -75,7 +87,7 @@ ENV HOME=/home/node \
     TERM=xterm-256color
 
 # 暴露端口
-EXPOSE 18789 18790
+EXPOSE 7860
 
 # 设置工作目录为 home
 WORKDIR /home/node
